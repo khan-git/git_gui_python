@@ -1,8 +1,8 @@
 
-dest="gitgui_venv"
+dest="git_gui_venv"
 
 echo "Check python environment"
-if [ ! -d "$(pwd)/gitgui_venv" ]
+if [ ! -d "$(pwd)/${dest}" ]
 then
     if [[ -d "${dest}" ]]
     then
@@ -36,9 +36,9 @@ then
     echo "Venv ${dest} created!"
     echo -e "\n\nTo enter the new virtual enviroment enter: 'source ${dest}/bin/activate'\n\n"
     echo -e "\n\nTo leave the new virtual enviroment just enter: 'deactivate'\n\n"
+else
+
+    source ${dest}/bin/activate
+    python -V
 fi
-
-source gitgui_venv/bin/activate
-python -V
-
 export PATH=$(pwd)/bin:$PATH

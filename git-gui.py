@@ -2,12 +2,64 @@ import json
 import os
 import sys
 import json
-from PyQt5.QtGui import *
-from PyQt5.QtCore import *
-from PyQt5.QtWidgets import *
+from time import sleep
+from typing import Union
+
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
+from PyQt6.QtWidgets import *
 from datetime import datetime
 
-from git import Repo, Head, RemoteProgress, GitCommandError
+from git import Repo, Head, RemoteProgress, GitCommandError, UpdateProgress
+
+
+stylesheet = """
+QMainWindow,
+QWidget,
+QDialog {
+    background-color: white;
+    color: black;
+}
+
+QTableWidget,
+QTreeView {
+    background-color: white;
+    color: black;
+}
+
+QToolTip { 
+    background-color: yellow; 
+    color: black;
+    border-style: outset;
+    border-width: 2px;
+    border-radius: 5px;
+    padding: 3px;
+}
+
+QTreeView::branch:has-siblings: !adjoins-item {
+    border-image: url(images/vline.png) 0;
+}
+
+QTreeView::branch:has-siblings:adjoins-item {
+    border-image: url(images/branch-more.png) 0;
+}
+
+QTreeView::branch: !has-children: !has-siblings:adjoins-item {
+    border-image: url(images/branch-end.png) 0;
+}
+
+QTreeView::branch:has-children: !has-siblings:closed,
+QTreeView::branch:closed:has-children:has-siblings {
+    border-image: none;
+    image: url(images/branch-closed.png);
+}
+
+QTreeView::branch:open:has-children: !has-siblings,
+QTreeView::branch:open:has-children:has-siblings {
+    border-image: none;
+    image: url(images/branch-open.png);
+}
+"""
 
 class Cache():
     def __init__(self) -> None:
@@ -18,12 +70,20 @@ class GroupItem(QStandardItem):
     def __init__(self, text: str):
         super().__init__(text)
 
+    def __hash__(self) -> int:
+        return hash(self.text())
+
+
 class RepoItem(QStandardItem):
-    def __init__(self, text: str, repo: Repo):
+    def __init__(self, text: str, repo: Repo, icon: QIcon = None, update_icon: QIcon = None):
         super().__init__(text)
-        self.setData(repo, Qt.UserRole)
+        self.setData(repo, Qt.ItemDataRole.UserRole)
         self.path_item = QStandardItem(repo.working_dir)
         self.branch_name = QStandardItem(repo.active_branch.name)
+        self._icon = icon
+        self._update_icon = update_icon
+        self._blink_left = 0
+        self._in_blink = False
 
     @property
     def items(self) -> list:
@@ -31,7 +91,7 @@ class RepoItem(QStandardItem):
     
     @property
     def repo(self) -> Repo:
-        return self.data(Qt.UserRole)
+        return self.data(Qt.ItemDataRole.UserRole)
     
     @property
     def branches(self) -> list:
@@ -54,6 +114,9 @@ class RepoItem(QStandardItem):
                 return b
         return None
     
+    def __hash__(self) -> int:
+        return hash(self.repo)
+    
     def set_branch(self, branch, create_if_not_existing: bool = False) -> Head:
         """Set branch if exists. Create  if told so.
         Return None if branch does not exist"""
@@ -75,23 +138,61 @@ class RepoItem(QStandardItem):
     def update_dirty_status(self):
         if self.repo.is_dirty():
             self.setForeground(QColorConstants.DarkYellow)
-            self.setIcon(qApp.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+            self.setIcon(self._icon)
             self.setToolTip("Dirty!")
         else:
             self.setForeground(QColorConstants.Black)
             self.setToolTip("")
 
         
-    def pull(self):
+    def pull(self) -> None:
+        """Do pull on repo. Return if updated."""
+        self.setBackground(QColorConstants.DarkYellow)
         repo: Repo = self.repo
         if 'origin' in repo.remotes:
             try:
-                repo.remotes.origin.pull()
+                # last_commit = repo.active_branch.commit
+                if not self.repo.is_dirty():
+                    repo.remotes.origin.pull()
+                # if last_commit != repo.active_branch.commit:
+                #     return True
             except GitCommandError as ex:
-                QMessageBox.information(None, f"Git Error: {self.text()}", ex.stderr)
+                print(f"{ex}")
+                QMessageBox.information(None, f"Git Error: {self.text()}", f"{ex}")
+            finally:
+                self.setBackground(QColorConstants.White)
+        # return False
 
+    def blink(self, times: int = 0) -> int:
+        """Blink number of times. Return times left."""
+        if times > 0:
+            self._blink_left = times
+        if self._blink_left > 0 and self.icon().name() != self._update_icon.name():
+            self.setIcon(self._update_icon)
+        else:
+            self._blink_left -= 1
+            if self.repo.is_dirty():
+                self.setIcon(self._icon)
+            else:
+                self.setIcon(QIcon())
+        return self._blink_left
+
+
+class MyUpdateProgress(UpdateProgress):
+
+    def update(self, op_code: int, cur_count: str | float, max_count: str | float | None = None, message: str = "") -> None:
+        print(
+            op_code,
+            cur_count,
+            max_count,
+            cur_count / (max_count or 100.0),
+            message or "NO MESSAGE",
+        )
+        return super().update(op_code, cur_count, max_count, message)
+    
 
 class MyProgressPrinter(RemoteProgress):
+
     def update(self, op_code, cur_count, max_count=None, message=""):
         print(
             op_code,
@@ -100,6 +201,7 @@ class MyProgressPrinter(RemoteProgress):
             cur_count / (max_count or 100.0),
             message or "NO MESSAGE",
         )
+        return super().update(op_code, cur_count, max_count, message)
 
 class AddToGroupDialog(QDialog):
 
@@ -151,6 +253,19 @@ class SelectBranchDialog(QDialog):
         self.buttonBox.rejected.connect(self.reject)
         self.layout.addWidget(self.buttonBox)
 
+class Worker(QRunnable):
+
+    def __init__(self, fn, *args, **kwargs) -> None:
+        super().__init__()
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+        self.setAutoDelete(True)
+
+    @pyqtSlot()
+    def run(self):
+        self.fn(*self.args, **self.kwargs)
+
 class MainWindow(QMainWindow):
 
     def __init__(self):
@@ -170,8 +285,12 @@ class MainWindow(QMainWindow):
         qr.moveCenter(cp)
         self.move(qr.topLeft())
 
+        self.setStyleSheet(stylesheet)
+
         self.window_title = "Git Gui"
         self.setWindowTitle(self.window_title)
+
+        self.thread_pool = QThreadPool()
         
         self.status_bar = self.statusBar()
         self.setupMenuBar()
@@ -187,6 +306,7 @@ class MainWindow(QMainWindow):
         # self._dirty_timer = QTimer(self)
         # self._dirty_timer.timeout.connect(self.update_dirty_status)
         # self._dirty_timer.start(5000)
+        self._blinking_repo_items = []
  
     def focusInEvent(self, e):
         self._dirty_timer.stop()
@@ -208,19 +328,14 @@ class MainWindow(QMainWindow):
         self._dirty_timer = QTimer(self)
         self._dirty_timer.timeout.connect(self.update_dirty_status)
         self._dirty_timer.start(20000)
-
-    @pyqtSlot(QModelIndex)
-    def dlblSelected(self, newIndex: QModelIndex):
-        item: QListWidgetItem = self.dlblList.itemFromIndex(newIndex)
-        print(item.data(Qt.UserRole))
                 
     def createRepositoryTable(self):
         box = QGroupBox("Git repositories")
         bl = QHBoxLayout()
         box.setLayout(bl)
         self.repositoryTreeModel = QStandardItemModel(0, 3 , self)
-        self.repositoryTreeModel.setHeaderData(0, Qt.Horizontal, "Group")
-        self.repositoryTreeModel.setHeaderData(1, Qt.Horizontal, "Branch")
+        self.repositoryTreeModel.setHeaderData(0, Qt.Orientation.Horizontal, "Group")
+        self.repositoryTreeModel.setHeaderData(1, Qt.Orientation.Horizontal, "Branch")
 #        self.treeModel.setHeaderData(2, Qt.Horizontal, "Repository")
         self._group_all = QStandardItem('All')
         self.repositoryTreeModel.invisibleRootItem().appendRow([self._group_all])
@@ -253,43 +368,57 @@ class MainWindow(QMainWindow):
     def rightMouseMenu(self, position: QPoint):
         cIndex: QModelIndex = self.repositoryTree.currentIndex()
         item = self.repositoryTreeModel.itemFromIndex(cIndex.siblingAtColumn(0))
-
         menu = QMenu()
-        items: list = self.items_from_indexes(self.repositoryTree.selectedIndexes(), self.repositoryTreeModel)
+
+        # if len(self.repositoryTree.selectedIndexes()) == 0:
+        #     self.repositoryTree.selectionModel().select(cIndex, QItemSelectionModel.SelectionFlag.Select)
+
+        items = list(set([self.repositoryTreeModel.itemFromIndex(index.siblingAtColumn(0)) for index in self.repositoryTree.selectedIndexes()]))
+        if item not in items:
+            items.append(item)
+
         if type(item) is RepoItem:
             # Repository menu
-            pIndex = self.repositoryTree.indexAt(position)
-            pytest_xml: str = pIndex.siblingAtColumn(0).data(Qt.ItemDataRole.UserRole)
 
             menu = QMenu()
-            action:QAction = menu.addAction("Set to branch")
-            action.triggered.connect(lambda: self.set_to_branch(items))
             action:QAction = menu.addAction("Pull")
-            action.triggered.connect(lambda: self.do_pull(items))
+            action.triggered.connect(lambda checked: self.do_pull(items))
+            action:QAction = menu.addAction("Set to branch")
+            action.triggered.connect(lambda checked: self.set_to_branch(items))
             menu.addSeparator()
             action:QAction = menu.addAction("Create branch")
-            action.triggered.connect(lambda: self.create_branch(items))
+            action.triggered.connect(lambda checked: self.create_branch(items))
             menu.addSeparator()
             action:QAction = menu.addAction("Add to group")
-            action.triggered.connect(lambda: self.add_to_group(items))
+            action.triggered.connect(lambda checked: self.add_to_group(items))
+            menu.addSeparator()
+            if item.parent().text() == 'All':
+                items = [it for it in items if type(it) is RepoItem and it.parent().text() != 'All']
+                action:QAction = menu.addAction("Remove from all groups")
+                action.triggered.connect(lambda checked: self.remove_from_group(items))
+            else:
+                items = [it for it in items if type(it) is RepoItem and it.parent().text() != 'All']
+                action:QAction = menu.addAction("Remove from group")
+                action.triggered.connect(lambda checked: self.remove_from_group(items))
 
-        if type(item) is GroupItem:
+
+        elif type(item) is GroupItem:
             # Group menus
             if item.text() == "All":
                 return
 
             menu = QMenu()
-            action:QAction = menu.addAction("Set to branch")
-            action.triggered.connect(lambda: self.set_to_branch(items))
-            action:QAction = menu.addAction("Create branch")
-            action.triggered.connect(lambda: self.create_branch(items))
             action:QAction = menu.addAction("Pull")
-            action.triggered.connect(lambda: self.do_pull(items))
+            action.triggered.connect(lambda checked: self.do_pull(items))
+            action:QAction = menu.addAction("Set to branch")
+            action.triggered.connect(lambda checked: self.set_to_branch(items))
+            action:QAction = menu.addAction("Create branch")
+            action.triggered.connect(lambda checked: self.create_branch(items))
             menu.addSeparator()
             action:QAction = menu.addAction("Rename group")
-            action.triggered.connect(self.rename_group)
+            action.triggered.connect(lambda checked: self.rename_group(item))
             action:QAction = menu.addAction("Remove group")
-            action.triggered.connect(self.remove_group)
+            action.triggered.connect(lambda checked: self.remove_group(item))
                     
         menu.exec(self.repositoryTree.viewport().mapToGlobal(position))
 
@@ -325,7 +454,10 @@ class MainWindow(QMainWindow):
                 rows.append(index.row())
         return items
 
-    def add_to_group(self, items: list):
+    @pyqtSlot()
+    def add_to_group(self, items):
+#        items = set([self.repositoryTreeModel.itemFromIndex(index.siblingAtColumn(0)) for index in self.repositoryTree.selectedIndexes()])
+
         dcd = AddToGroupDialog(self, self._groups.keys())
         if dcd.exec():
             group_box: QCheckBox
@@ -342,12 +474,36 @@ class MainWindow(QMainWindow):
             # Cancel selected
             return
 
+    @pyqtSlot(list)
+    def remove_from_group(self, items: list):
+        repo_items = [item for item in items if type(item) is RepoItem]
+        item: RepoItem
+        for item in repo_items:
+            print(f'{type(item)} {item.text()}')
+            parent: GroupItem = item.parent()
+            if parent.text() != 'All':
+                group_meta: [] = self._groups.get(parent.text())
+                group_meta.remove(item.text())
+            else:
+                self._repositories.pop(item.text())
+                group_meta: []
+                for group_meta in self._groups:
+                    if item.text() in group_meta:
+                        group_meta.remove(item.text())
+
+            parent.removeRow(item.row())
+        self.save_groups_to_settings()
+        self.save_repositories_to_settings()
+        self.update_repository_data()
+
     def create_branch(self, items: list):
         """Open dialog to get branch name, check if already exist and then create.
         Have a set-checkbox to set immediately."""
         branch_name, ok = QInputDialog.getText(self, 'Create branch dialog', 'Branch:')
         if not ok or not branch_name:
             return
+
+        items = set([self.repositoryTreeModel.itemFromIndex(index.siblingAtColumn(0)) for index in self.repositoryTree.selectedIndexes()])
 
         for item in items:
             if type(item) is RepoItem:
@@ -358,15 +514,42 @@ class MainWindow(QMainWindow):
                     child: RepoItem = item.child(row, 0)
                     self._create_branch(child, branch_name)
 
-    def do_pull(self, items: list):
+    def do_pull(self, items):
         """Pull on all selected repos"""
+
+        filtered_items = []
         for item in items:
             if type(item) is RepoItem:
-                item.pull()
+                filtered_items.append(item)
+
             if type(item) is GroupItem:
                 for row in range(item.rowCount()):
-                    child: RepoItem = item.child(row, 0)
-                    child.pull()
+                    filtered_items.append(item.child(row, 0))
+
+        item: RepoItem
+        for item in set(filtered_items):
+            it = Worker(item.pull)
+            self.thread_pool.start(it)
+
+
+    @pyqtSlot()
+    def do_blinking(self):
+        to_remove = []
+        for repo_item in self._blinking_repo_items:
+            if repo_item.blink() <= 0:
+                to_remove.append(repo_item)
+        for x in to_remove:
+            x.blink() # To get it to remove icon
+            self._blinking_repo_items.remove(x)
+        if len(self._blinking_repo_items) > 0:
+            QTimer.singleShot(500, self.do_blinking)
+
+    def get_all_repo_items(self) -> RepoItem:
+        for row in range(self.repositoryTreeModel.invisibleRootItem().rowCount()):
+            group: GroupItem = self.repositoryTreeModel.item(row, 0)
+            for child_row in range(group.rowCount()):
+                yield group.child(child_row, 0)
+
 
     def _create_branch(self, item: RepoItem, branch_name: str):
         """Check existence of branch before creating it in Repo"""
@@ -376,7 +559,7 @@ class MainWindow(QMainWindow):
             print(f"Branch {branch_name} created in {item.text()}")
 
 
-    def set_to_branch(self, items: list):
+    def set_to_branch(self, items):
         """Set all repos in group to branch"""
         heads = []
         branch_names = []
@@ -394,6 +577,11 @@ class MainWindow(QMainWindow):
         for br in heads:
             if br.name not in branch_names:
                 branch_names.append(br.name)
+
+        if 'master' in branch_names:
+            if len(branch_names) >= 2 and branch_names[0] != 'master':
+                branch_names.remove('master')
+                branch_names.insert(1, 'master')
 
         sbd = SelectBranchDialog(self, branch_names)
         if sbd.exec():
@@ -451,7 +639,7 @@ class MainWindow(QMainWindow):
 
         addRepositoryAction = QAction("&Add repository", self)
         addRepositoryAction.setStatusTip('Add git repository path')
-        addRepositoryAction.triggered.connect(self.addRepository)
+        addRepositoryAction.triggered.connect(self.add_repository)
         fileMenu.addAction(addRepositoryAction)
 
         addGroupAction = QAction("&Create group", self)
@@ -479,18 +667,18 @@ class MainWindow(QMainWindow):
 
 
     @pyqtSlot()
-    def addRepository(self, group: str = "All"):
+    def add_repository(self, group: str = "All"):
         file_dialog = QFileDialog()
-        file_dialog.setFileMode(QFileDialog.DirectoryOnly)
-        file_dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+        file_dialog.setFileMode(QFileDialog.FileMode.Directory)
+        file_dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
         file_view = file_dialog.findChild(QListView, 'listView')
 
         # to make it possible to select multiple directories:
         if file_view:
-            file_view.setSelectionMode(QAbstractItemView.MultiSelection)
+            file_view.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         f_tree_view = file_dialog.findChild(QTreeView)
         if f_tree_view:
-            f_tree_view.setSelectionMode(QAbstractItemView.MultiSelection)
+            f_tree_view.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
 
         if file_dialog.exec():
             paths = file_dialog.selectedFiles()
@@ -516,7 +704,9 @@ class MainWindow(QMainWindow):
         self.settings.setValue('groups', json.dumps(self._groups))
 
     def add_to_tree(self, name: str, repo: Repo, group: GroupItem):
-        repo_item = RepoItem(name, repo)
+        repo_item = RepoItem(name, repo, 
+                             self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView), 
+                             self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         group.appendRow(repo_item.items)
         self.repositoryTree.setSortingEnabled(True)
         # self.repositoryTree.expandAll()
@@ -584,4 +774,4 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     main_window = MainWindow()
     main_window.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

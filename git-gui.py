@@ -355,6 +355,7 @@ class MainWindow(QMainWindow):
         self.repositoryTree.hideColumn(2)
         self.repositoryTree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.repositoryTree.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        self.repositoryTree.doubleClicked.connect(self.doubleClicked)
 
 
         self.repositoryTree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -364,6 +365,15 @@ class MainWindow(QMainWindow):
         self.repositoryTree.collapsed.connect(self.save_tree_expand)
         bl.addWidget(self.repositoryTree)
         return box
+
+    def doubleClicked(self, itemIndex: QModelIndex):
+        item: RepoItem = self.repositoryTreeModel.itemFromIndex(itemIndex)
+        if type(item) == RepoItem:
+            QMessageBox.information(None, f"Details: {item.text()}", 
+                                    f"Branch: {item.branch_name.text()}\n"
+                                    +f"Path: {item.repo.working_dir}\n"
+                                    +f"Remote: {item.repo.remote().url}")
+
 
     def rightMouseMenu(self, position: QPoint):
         cIndex: QModelIndex = self.repositoryTree.currentIndex()

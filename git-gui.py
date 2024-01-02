@@ -393,13 +393,13 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked: self.add_to_group(items))
             menu.addSeparator()
             if item.parent().text() == 'All':
-                items = [it for it in items if type(it) is RepoItem and it.parent().text() != 'All']
+                itemsNoAll = [it for it in items if type(it) is RepoItem and it.parent().text() != 'All']
                 action:QAction = menu.addAction("Remove from all groups")
-                action.triggered.connect(lambda checked: self.remove_from_group(items))
+                action.triggered.connect(lambda checked: self.remove_from_group(itemsNoAll))
             else:
-                items = [it for it in items if type(it) is RepoItem and it.parent().text() != 'All']
+                itemsNoAll2 = [it for it in items if type(it) is RepoItem and it.parent().text() != 'All']
                 action:QAction = menu.addAction("Remove from group")
-                action.triggered.connect(lambda checked: self.remove_from_group(items))
+                action.triggered.connect(lambda checked: self.remove_from_group(itemsNoAll2))
 
 
         elif type(item) is GroupItem:
@@ -456,8 +456,6 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def add_to_group(self, items):
-#        items = set([self.repositoryTreeModel.itemFromIndex(index.siblingAtColumn(0)) for index in self.repositoryTree.selectedIndexes()])
-
         dcd = AddToGroupDialog(self, self._groups.keys())
         if dcd.exec():
             group_box: QCheckBox

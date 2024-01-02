@@ -444,14 +444,14 @@ class MainWindow(QMainWindow):
             self.update_repository_data()
         
 
-    def remove_group(self):
+    def remove_group(self, item):
         cIndex: QModelIndex = self.repositoryTree.currentIndex()
-        item = self.repositoryTreeModel.itemFromIndex(cIndex.siblingAtColumn(0))
         answere = QMessageBox.critical(self, "Remove group", f"Do you wish to remove group {item.text()}?", buttons=QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
                              defaultButton=QMessageBox.StandardButton.No)
         if answere == QMessageBox.StandardButton.Yes:
             if item.text() in self._groups:
                 self._groups.pop(item.text())
+                self.save_groups_to_settings()
                 self.update_repository_data()
 
     def items_from_indexes(self, indexes: list, tree_model: QStandardItemModel) -> list:

@@ -79,7 +79,10 @@ class RepoItem(QStandardItem):
         super().__init__(text)
         self.setData(repo, Qt.ItemDataRole.UserRole)
         self.path_item = QStandardItem(repo.working_dir)
-        self.branch_name = QStandardItem(repo.active_branch.name)
+        try:
+            self.branch_name = QStandardItem(repo.active_branch.name)
+        except TypeError as ex:
+            self.branch_name = QStandardItem("<detached>")
         self._icon = icon
         self._update_icon = update_icon
         self._blink_left = 0
@@ -329,6 +332,11 @@ class MainWindow(QMainWindow):
         self._dirty_timer.timeout.connect(self.update_dirty_status)
         self._dirty_timer.start(20000)
                 
+    def items_changed(self, index: int = 0):
+        for c in range(0, self.repositoryTreeModel.columnCount()):
+            self.repositoryTree.resizeColumnToContents(c)
+
+
     def createRepositoryTable(self):
         box = QGroupBox("Git repositories")
         bl = QHBoxLayout()
@@ -339,6 +347,7 @@ class MainWindow(QMainWindow):
 #        self.treeModel.setHeaderData(2, Qt.Horizontal, "Repository")
         self._group_all = QStandardItem('All')
         self.repositoryTreeModel.invisibleRootItem().appendRow([self._group_all])
+        self.repositoryTreeModel.itemChanged.connect(self.items_changed)
 
 
         self.repositoryTree = QTreeView()
@@ -349,9 +358,7 @@ class MainWindow(QMainWindow):
         self.repositoryTree.setWindowTitle("Dir View")
         self.repositoryTree.resize(640, 480)
         self.repositoryTree.setColumnWidth(1, 300)
-        self.repositoryTree.resizeColumnToContents(0)
-        self.repositoryTree.resizeColumnToContents(1)
-#        self.repositoryTree.resizeColumnToContents(2)
+        self.items_changed()
         self.repositoryTree.hideColumn(2)
         self.repositoryTree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.repositoryTree.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
@@ -362,7 +369,7 @@ class MainWindow(QMainWindow):
         self.repositoryTree.customContextMenuRequested.connect(self.rightMouseMenu)
 
         self.repositoryTree.expanded.connect(self.adjustTreeColumns)
-        self.repositoryTree.collapsed.connect(self.save_tree_expand)
+        self.repositoryTree.collapsed.connect(self.adjustTreeColumns)
         bl.addWidget(self.repositoryTree)
         return box
 
@@ -609,7 +616,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def adjustTreeColumns(self):
-        self.repositoryTree.resizeColumnToContents(1)
+        self.items_changed()
         self.save_tree_expand()
         
     def save_tree_expand(self):
@@ -719,17 +726,19 @@ class MainWindow(QMainWindow):
         self.repositoryTree.setSortingEnabled(True)
         # self.repositoryTree.expandAll()
         self.repositoryTree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
-        for c in range(0, self.repositoryTreeModel.columnCount()):
-            self.repositoryTree.resizeColumnToContents(c)
                     
     @pyqtSlot()
     def update_repository_data(self):
         self.repositoryTree.expanded.disconnect(self.adjustTreeColumns)
-        self.repositoryTree.collapsed.disconnect(self.save_tree_expand)
+        self.repositoryTree.collapsed.disconnect(self.adjustTreeColumns)
 
         self.repositoryTreeModel.setRowCount(0)
 
         self._group_all = GroupItem('All')
+        it = Worker(self.update_repository_worker)
+        self.thread_pool.start(it)
+
+    def update_repository_worker(self):
         value: dict
         for name in sorted(self._repositories.keys()):
             value: dict = self._repositories.get(name)
@@ -762,15 +771,13 @@ class MainWindow(QMainWindow):
             self.repositoryTree.expand(g_index)
 
         self.repositoryTree.expanded.connect(self.adjustTreeColumns)
-        self.repositoryTree.collapsed.connect(self.save_tree_expand)
-
-        QTimer.singleShot(10, self.update_dirty_status)
+        self.repositoryTree.collapsed.connect(self.adjustTreeColumns)
+        self.update_dirty_status()
 
 
     @pyqtSlot()
     def update_dirty_status(self):
         """Uppdate background color if dirty"""
-        curr_time: datetime = datetime.now()
         child: RepoItem
         for group_row in range(self.repositoryTreeModel.invisibleRootItem().rowCount()):
             group_item = self.repositoryTreeModel.invisibleRootItem().child(group_row)

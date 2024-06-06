@@ -87,6 +87,7 @@ class RepoItem(QStandardItem):
         self._update_icon = update_icon
         self._blink_left = 0
         self._in_blink = False
+        self._error_msg = None
 
     @property
     def items(self) -> list:
@@ -101,6 +102,10 @@ class RepoItem(QStandardItem):
         """Returns a list of Head"""
         return self.repo.branches
 
+    @property
+    def error_msg(self) -> str:
+        return self._error_msg
+    
     def create_branch(self, branch: str) -> Head:
         """Create branch. Validate if already exists"""
         if branch in self.repo.branches:
@@ -150,6 +155,7 @@ class RepoItem(QStandardItem):
         
     def pull(self) -> None:
         """Do pull on repo. Return if updated."""
+        self._error_msg = None
         self.setBackground(QColorConstants.DarkYellow)
         repo: Repo = self.repo
         if 'origin' in repo.remotes:
@@ -160,8 +166,9 @@ class RepoItem(QStandardItem):
                 # if last_commit != repo.active_branch.commit:
                 #     return True
             except GitCommandError as ex:
+                self._error_msg = f"Git Error: {self.text()}: {ex}"
                 print(f"{ex}")
-                QMessageBox.information(None, f"Git Error: {self.text()}", f"{ex}")
+                # QMessageBox.information(None, f"Git Error: {self.text()}", f"{ex}")
             finally:
                 self.setBackground(QColorConstants.White)
         # return False
@@ -257,6 +264,7 @@ class SelectBranchDialog(QDialog):
         self.layout.addWidget(self.buttonBox)
 
 class Worker(QRunnable):
+    WARNING = pyqtSignal(str)
 
     def __init__(self, fn, *args, **kwargs) -> None:
         super().__init__()
@@ -276,7 +284,7 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("GitGui", "GitGui")
         self._repositories: dict = json.loads(self.settings.value('repositories', '{}'))
         self._groups: dict = json.loads(self.settings.value('groups', '{}'))
-        self._groups_expanded: [] = json.loads(self.settings.value('groups_expanded', '[]'))
+        self._groups_expanded: list = json.loads(self.settings.value('groups_expanded', '[]'))
         print(f'Settings file: {self.settings.fileName()}')
 
         self.setMinimumSize(800, 900)
@@ -545,7 +553,10 @@ class MainWindow(QMainWindow):
         for item in set(filtered_items):
             it = Worker(item.pull)
             self.thread_pool.start(it)
-
+        self.thread_pool.waitForDone()
+        for item in set(filtered_items):
+            if item.error_msg:
+                QMessageBox.information(None, f"Git Error: {item.text()}", item.error_msg)
 
     @pyqtSlot()
     def do_blinking(self):
